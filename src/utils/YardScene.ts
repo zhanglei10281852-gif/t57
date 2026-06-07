@@ -14,6 +14,11 @@ export class YardScene {
   private gantry: THREE.Group | null = null;
   private trolley: THREE.Group | null = null;
   private spreader: THREE.Mesh | null = null;
+  private hoistCables: THREE.Mesh[] = [];
+  private cableTopY: number = 0;
+  private gantryHeight: number = 0;
+  private trolleyY: number = 0;
+  private spreaderHomeY: number = 0;
   private raycaster: THREE.Raycaster;
   private mouse: THREE.Vector2;
   private hoveredMesh: THREE.Mesh | null = null;
@@ -28,6 +33,7 @@ export class YardScene {
   private highlightMesh: THREE.Mesh | null = null;
   private blinkInterval: number | null = null;
   private exitPosition: { col: number; row: number } = { col: 0, row: -2 };
+  private isAnimatingFlag: boolean = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
@@ -190,58 +196,167 @@ export class YardScene {
 
     const beamMaterial = new THREE.MeshStandardMaterial({ color: 0x48bb78 });
     const legMaterial = new THREE.MeshStandardMaterial({ color: 0x38a169 });
+    const trolleyMaterial = new THREE.MeshStandardMaterial({ color: 0x68d391 });
+    const spreaderMaterial = new THREE.MeshStandardMaterial({
+      color: 0xecc94b,
+    });
+    const cableMaterial = new THREE.MeshStandardMaterial({
+      color: 0x94a3b8,
+      metalness: 0.6,
+      roughness: 0.4,
+    });
 
     const yardWidth =
       YARD_CONFIG.cols * (YARD_CONFIG.containerWidth + YARD_CONFIG.gap) +
       YARD_CONFIG.gap;
-    const yardDepth =
-      YARD_CONFIG.rows * (YARD_CONFIG.containerDepth + YARD_CONFIG.gap) +
-      YARD_CONFIG.gap;
-    const gantryHeight =
-      YARD_CONFIG.maxTiers * YARD_CONFIG.containerHeight + 10;
     const railOffset = yardWidth / 2 + 4;
 
-    const legGeo = new THREE.BoxGeometry(1, gantryHeight, 1);
+    this.gantryHeight = YARD_CONFIG.maxTiers * YARD_CONFIG.containerHeight + 12;
+    this.trolleyY = this.gantryHeight - 0.9;
+
+    const legGeo = new THREE.BoxGeometry(1, this.gantryHeight, 1);
     const leg1 = new THREE.Mesh(legGeo, legMaterial);
-    leg1.position.set(railOffset, gantryHeight / 2, 0);
+    leg1.position.set(railOffset, this.gantryHeight / 2, 0);
     leg1.castShadow = true;
     this.gantry.add(leg1);
 
     const leg2 = new THREE.Mesh(legGeo, legMaterial);
-    leg2.position.set(-railOffset, gantryHeight / 2, 0);
+    leg2.position.set(-railOffset, this.gantryHeight / 2, 0);
     leg2.castShadow = true;
     this.gantry.add(leg2);
 
-    const beamGeo = new THREE.BoxGeometry(railOffset * 2 + 1, 1.5, 2);
+    const beamGeo = new THREE.BoxGeometry(railOffset * 2 + 1, 1.8, 2.2);
     const beam = new THREE.Mesh(beamGeo, beamMaterial);
-    beam.position.set(0, gantryHeight, 0);
+    beam.position.set(0, this.gantryHeight, 0);
     beam.castShadow = true;
     this.gantry.add(beam);
 
     this.trolley = new THREE.Group();
-    this.trolley.position.set(0, gantryHeight - 0.5, 0);
+    this.trolley.position.set(0, this.trolleyY, 0);
     this.gantry.add(this.trolley);
 
     const trolleyBody = new THREE.Mesh(
-      new THREE.BoxGeometry(4, 1.2, 3),
-      new THREE.MeshStandardMaterial({ color: 0x68d391 }),
+      new THREE.BoxGeometry(5, 1.6, 3.5),
+      trolleyMaterial,
     );
     trolleyBody.castShadow = true;
     this.trolley.add(trolleyBody);
 
+    const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.5, 16);
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x2d3748 });
+
+    const wheelFL = new THREE.Mesh(wheelGeo, wheelMat);
+    wheelFL.rotation.z = Math.PI / 2;
+    wheelFL.position.set(-2, -0.8, 1.5);
+    this.trolley.add(wheelFL);
+
+    const wheelFR = wheelFL.clone();
+    wheelFR.position.x = 2;
+    this.trolley.add(wheelFR);
+
+    const wheelBL = wheelFL.clone();
+    wheelBL.position.z = -1.5;
+    this.trolley.add(wheelBL);
+
+    const wheelBR = wheelFR.clone();
+    wheelBR.position.z = -1.5;
+    this.trolley.add(wheelBR);
+
     this.spreader = new THREE.Mesh(
       new THREE.BoxGeometry(
-        YARD_CONFIG.containerWidth * 1.1,
-        0.4,
-        YARD_CONFIG.containerDepth * 0.8,
+        YARD_CONFIG.containerWidth * 1.15,
+        0.5,
+        YARD_CONFIG.containerDepth * 0.85,
       ),
-      new THREE.MeshStandardMaterial({ color: 0xecc94b }),
+      spreaderMaterial,
     );
-    this.spreader.position.set(0, -4, 0);
     this.spreader.castShadow = true;
+
+    this.spreaderHomeY = -8;
+    this.spreader.position.set(0, this.spreaderHomeY, 0);
     this.trolley.add(this.spreader);
 
+    this.cableTopY = -0.8;
+
+    const cablePositions = [
+      {
+        x: -YARD_CONFIG.containerWidth * 0.4,
+        z: -YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: YARD_CONFIG.containerWidth * 0.4,
+        z: -YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: -YARD_CONFIG.containerWidth * 0.4,
+        z: YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: YARD_CONFIG.containerWidth * 0.4,
+        z: YARD_CONFIG.containerDepth * 0.3,
+      },
+    ];
+
+    const initialCableLength = Math.abs(
+      this.cableTopY - (this.spreaderHomeY + 0.25),
+    );
+
+    cablePositions.forEach((pos) => {
+      const cableGeo = new THREE.CylinderGeometry(
+        0.15,
+        0.15,
+        initialCableLength,
+        8,
+      );
+      const cable = new THREE.Mesh(cableGeo, cableMaterial);
+      cable.position.set(pos.x, this.cableTopY - initialCableLength / 2, pos.z);
+      cable.castShadow = true;
+      this.hoistCables.push(cable);
+      this.trolley!.add(cable);
+    });
+
+    const gantryYardDepth =
+      YARD_CONFIG.rows * (YARD_CONFIG.containerDepth + YARD_CONFIG.gap) +
+      YARD_CONFIG.gap;
+    this.gantry.position.z = -gantryYardDepth / 2 - 5;
+
     this.scene.add(this.gantry);
+  }
+
+  private updateHoistCables() {
+    if (!this.spreader || !this.trolley) return;
+
+    const spreaderY = this.spreader.position.y;
+    const cableBottomY = spreaderY + 0.25;
+    const newLength = Math.abs(this.cableTopY - cableBottomY);
+
+    const cablePositions = [
+      {
+        x: -YARD_CONFIG.containerWidth * 0.4,
+        z: -YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: YARD_CONFIG.containerWidth * 0.4,
+        z: -YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: -YARD_CONFIG.containerWidth * 0.4,
+        z: YARD_CONFIG.containerDepth * 0.3,
+      },
+      {
+        x: YARD_CONFIG.containerWidth * 0.4,
+        z: YARD_CONFIG.containerDepth * 0.3,
+      },
+    ];
+
+    this.hoistCables.forEach((cable, i) => {
+      const pos = cablePositions[i];
+      const oldGeo = cable.geometry as THREE.CylinderGeometry;
+      oldGeo.dispose();
+      const newGeo = new THREE.CylinderGeometry(0.15, 0.15, newLength, 8);
+      cable.geometry = newGeo;
+      cable.position.set(pos.x, this.cableTopY - newLength / 2, pos.z);
+    });
   }
 
   private createHeatmapBase() {
@@ -610,11 +725,18 @@ export class YardScene {
     }
   }
 
+  public getIsAnimating(): boolean {
+    return this.isAnimatingFlag;
+  }
+
   public async performDischargeAnimation(
     container: Container,
     containers: Container[],
   ): Promise<number> {
-    if (!this.gantry || !this.trolley || !this.spreader) return 0;
+    if (!this.gantry || !this.trolley || !this.spreader || this.isAnimatingFlag)
+      return 0;
+
+    this.isAnimatingFlag = true;
 
     const aboveContainers = containers
       .filter(
@@ -629,7 +751,15 @@ export class YardScene {
     const tempPosition = this.findTempPosition(containers);
 
     const containerMesh = this.containerMeshes.get(container.id);
-    if (!containerMesh) return 0;
+    if (!containerMesh) {
+      this.isAnimatingFlag = false;
+      return 0;
+    }
+
+    const maxStackHeight = YARD_CONFIG.maxTiers * YARD_CONFIG.containerHeight;
+    const safeClearance = 2.5;
+    const clearHeight =
+      maxStackHeight + safeClearance + YARD_CONFIG.containerHeight + 0.3;
 
     for (const aboveContainer of aboveContainers) {
       const aboveMesh = this.containerMeshes.get(aboveContainer.id);
@@ -644,6 +774,7 @@ export class YardScene {
         tempPosition.row,
         0,
         aboveMesh,
+        clearHeight,
       );
 
       aboveContainer.position.col = tempPosition.col;
@@ -666,11 +797,15 @@ export class YardScene {
       this.exitPosition.row,
       0,
       containerMesh,
+      clearHeight,
     );
 
     this.containerGroup.remove(containerMesh);
     this.containerMeshes.delete(container.id);
 
+    await this.resetGantry();
+
+    this.isAnimatingFlag = false;
     return rehandleCount;
   }
 
@@ -695,29 +830,15 @@ export class YardScene {
     return { col: 0, row: 0 };
   }
 
-  private tweenTo(
-    target: any,
-    props: any,
-    duration: number,
-    onUpdate?: () => void,
-  ): Promise<void> {
+  private tweenPromise(tween: TWEEN.Tween<any>): Promise<void> {
     return new Promise((resolve) => {
-      const tween = new TWEEN.Tween(target)
-        .to(props, duration)
-        .easing(TWEEN.Easing.Cubic.InOut)
-        .onUpdate(() => {
-          if (onUpdate) onUpdate();
-        })
-        .onComplete(() => resolve());
+      tween.onComplete(() => resolve());
       tween.start();
     });
   }
 
-  private getSpreaderWorldPosition(): THREE.Vector3 {
-    if (!this.spreader) return new THREE.Vector3();
-    const worldPos = new THREE.Vector3();
-    this.spreader.getWorldPosition(worldPos);
-    return worldPos;
+  private getTrolleyWorldY(): number {
+    return this.trolleyY;
   }
 
   private moveContainerWithGantry(
@@ -728,6 +849,7 @@ export class YardScene {
     toRow: number,
     toTier: number,
     containerMesh: THREE.Mesh,
+    clearHeight: number,
   ): Promise<void> {
     return new Promise(async (resolve) => {
       if (!this.gantry || !this.trolley || !this.spreader) {
@@ -741,107 +863,148 @@ export class YardScene {
         fromTier,
       );
       const toPos = this.getContainerWorldPosition(toCol, toRow, toTier);
-      const liftHeight = YARD_CONFIG.maxTiers * YARD_CONFIG.containerHeight + 3;
+      const trolleyWorldY = this.getTrolleyWorldY();
 
-      await this.tweenTo(this.gantry.position, { z: fromPos.z }, 800);
+      const liftedSpreaderLocalY = -(trolleyWorldY - clearHeight);
 
-      const trolleyLocalX = fromPos.x - this.gantry.position.x;
-      await this.tweenTo(this.trolley.position, { x: trolleyLocalX }, 600);
+      await this.tweenPromise(
+        new TWEEN.Tween(this.gantry.position)
+          .to({ z: fromPos.z }, 900)
+          .easing(TWEEN.Easing.Cubic.InOut),
+      );
 
-      const spreaderDownY =
-        fromPos.y +
-        YARD_CONFIG.containerHeight / 2 +
-        0.5 -
-        this.trolley.position.y;
-      await this.tweenTo(this.spreader.position, { y: spreaderDownY }, 600);
+      await this.tweenPromise(
+        new TWEEN.Tween(this.trolley.position)
+          .to({ x: fromPos.x }, 700)
+          .easing(TWEEN.Easing.Cubic.InOut),
+      );
+
+      const pickupSpreaderLocalY = -(
+        trolleyWorldY -
+        (fromPos.y + YARD_CONFIG.containerHeight / 2 + 0.3)
+      );
+      await this.tweenPromise(
+        new TWEEN.Tween(this.spreader.position)
+          .to({ y: pickupSpreaderLocalY }, 700)
+          .easing(TWEEN.Easing.Cubic.InOut)
+          .onUpdate(() => this.updateHoistCables()),
+      );
 
       let isAttached = false;
-      const spreaderUpY =
-        -liftHeight + this.trolley.position.y - YARD_CONFIG.containerHeight / 2;
 
-      await new Promise<void>((res) => {
-        const tween = new TWEEN.Tween(this.spreader.position)
-          .to({ y: -liftHeight }, 700)
+      await this.tweenPromise(
+        new TWEEN.Tween(this.spreader.position)
+          .to({ y: liftedSpreaderLocalY }, 800)
           .easing(TWEEN.Easing.Cubic.InOut)
           .onUpdate(() => {
+            this.updateHoistCables();
             if (isAttached) {
-              const spreaderWorldPos = this.getSpreaderWorldPosition();
+              const spreaderWorldPos = new THREE.Vector3();
+              this.spreader!.getWorldPosition(spreaderWorldPos);
               containerMesh.position.x = spreaderWorldPos.x;
               containerMesh.position.y =
-                spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.5;
+                spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.3;
               containerMesh.position.z = spreaderWorldPos.z;
             }
           })
           .onStart(() => {
             isAttached = true;
-            const spreaderWorldPos = this.getSpreaderWorldPosition();
+            const spreaderWorldPos = new THREE.Vector3();
+            this.spreader!.getWorldPosition(spreaderWorldPos);
             containerMesh.position.x = spreaderWorldPos.x;
             containerMesh.position.y =
-              spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.5;
+              spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.3;
             containerMesh.position.z = spreaderWorldPos.z;
-          })
-          .onComplete(() => res());
-        tween.start();
-      });
+          }),
+      );
 
-      const toTrolleyLocalX = toPos.x - this.gantry.position.x;
-      await new Promise<void>((res) => {
-        const tween = new TWEEN.Tween(this.trolley.position)
-          .to({ x: toTrolleyLocalX }, 900)
+      await this.tweenPromise(
+        new TWEEN.Tween(this.trolley.position)
+          .to({ x: toPos.x }, 1000)
           .easing(TWEEN.Easing.Cubic.InOut)
           .onUpdate(() => {
             if (isAttached) {
-              const spreaderWorldPos = this.getSpreaderWorldPosition();
+              const spreaderWorldPos = new THREE.Vector3();
+              this.spreader!.getWorldPosition(spreaderWorldPos);
               containerMesh.position.x = spreaderWorldPos.x;
               containerMesh.position.z = spreaderWorldPos.z;
             }
-          })
-          .onComplete(() => res());
-        tween.start();
-      });
+          }),
+      );
 
-      await new Promise<void>((res) => {
-        const tween = new TWEEN.Tween(this.gantry.position)
-          .to({ z: toPos.z }, 900)
+      await this.tweenPromise(
+        new TWEEN.Tween(this.gantry.position)
+          .to({ z: toPos.z }, 1000)
           .easing(TWEEN.Easing.Cubic.InOut)
           .onUpdate(() => {
             if (isAttached) {
-              const spreaderWorldPos = this.getSpreaderWorldPosition();
+              const spreaderWorldPos = new THREE.Vector3();
+              this.spreader!.getWorldPosition(spreaderWorldPos);
               containerMesh.position.z = spreaderWorldPos.z;
             }
-          })
-          .onComplete(() => res());
-        tween.start();
-      });
+          }),
+      );
 
-      const targetSpreaderY =
-        toPos.y +
-        YARD_CONFIG.containerHeight / 2 +
-        0.5 -
-        this.trolley.position.y;
-      await new Promise<void>((res) => {
-        const tween = new TWEEN.Tween(this.spreader.position)
-          .to({ y: targetSpreaderY }, 700)
+      const dropSpreaderLocalY = -(
+        trolleyWorldY -
+        (toPos.y + YARD_CONFIG.containerHeight / 2 + 0.3)
+      );
+      await this.tweenPromise(
+        new TWEEN.Tween(this.spreader.position)
+          .to({ y: dropSpreaderLocalY }, 800)
           .easing(TWEEN.Easing.Cubic.InOut)
           .onUpdate(() => {
+            this.updateHoistCables();
             if (isAttached) {
-              const spreaderWorldPos = this.getSpreaderWorldPosition();
+              const spreaderWorldPos = new THREE.Vector3();
+              this.spreader!.getWorldPosition(spreaderWorldPos);
               containerMesh.position.y =
-                spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.5;
+                spreaderWorldPos.y - YARD_CONFIG.containerHeight / 2 - 0.3;
             }
           })
           .onComplete(() => {
             isAttached = false;
             containerMesh.position.copy(toPos);
-            res();
-          });
-        tween.start();
-      });
+          }),
+      );
 
-      await this.tweenTo(this.spreader.position, { y: -liftHeight }, 600);
+      await this.tweenPromise(
+        new TWEEN.Tween(this.spreader.position)
+          .to({ y: liftedSpreaderLocalY }, 600)
+          .easing(TWEEN.Easing.Cubic.InOut)
+          .onUpdate(() => this.updateHoistCables()),
+      );
 
       resolve();
     });
+  }
+
+  private async resetGantry() {
+    if (!this.gantry || !this.trolley || !this.spreader) return;
+
+    const yardDepth =
+      YARD_CONFIG.rows * (YARD_CONFIG.containerDepth + YARD_CONFIG.gap) +
+      YARD_CONFIG.gap;
+    const homeZ = -yardDepth / 2 - 5;
+
+    await Promise.all([
+      this.tweenPromise(
+        new TWEEN.Tween(this.gantry.position)
+          .to({ z: homeZ }, 1200)
+          .easing(TWEEN.Easing.Cubic.InOut),
+      ),
+      this.tweenPromise(
+        new TWEEN.Tween(this.trolley.position)
+          .to({ x: 0 }, 1200)
+          .easing(TWEEN.Easing.Cubic.InOut),
+      ),
+      this.tweenPromise(
+        new TWEEN.Tween(this.spreader.position)
+          .to({ y: this.spreaderHomeY }, 1000)
+          .easing(TWEEN.Easing.Cubic.InOut)
+          .onUpdate(() => this.updateHoistCables()),
+      ),
+    ]);
   }
 
   private animate = () => {

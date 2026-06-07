@@ -190,7 +190,7 @@
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import type { Container, ContainerStatus } from './types/container'
-import { STATUS_COLORS, STATUS_LABELS, YARD_CONFIG } from './types/container'
+import { STATUS_COLORS, STATUS_LABELS } from './types/container'
 import { generateMockContainers, getStatistics } from './data/mockData'
 import { YardScene } from './utils/YardScene'
 
